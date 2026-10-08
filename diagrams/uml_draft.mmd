@@ -1,0 +1,77 @@
+classDiagram
+    class Owner {
+        +str name
+        +list~TimeWindow~ availability
+        +list~Pet~ pets
+        +add_pet(pet: Pet) None
+        +remove_pet(name: str) None
+        +get_all_tasks() list~Task~
+        +add_availability(window: TimeWindow) None
+        +total_available_minutes() int
+    }
+
+    class TimeWindow {
+        +time start
+        +time end
+        +duration_minutes() int
+        +fits(start: time, duration_minutes: int) bool
+        +overlaps(other: TimeWindow) bool
+    }
+
+    class Pet {
+        +str name
+        +str species
+        +str breed
+        +int age
+        +list~str~ special_needs
+        +list~Task~ tasks
+        +add_task(task: Task) None
+        +remove_task(description: str) None
+        +get_pending_tasks() list~Task~
+    }
+
+    class Task {
+        +str description
+        +int duration_minutes
+        +str priority
+        +time time
+        +str frequency
+        +bool completed
+        +mark_complete() None
+    }
+
+    class Scheduler {
+        +Owner owner
+        +generate_plan() DailyPlan
+        +sort_by_priority(tasks: list~Task~) list~Task~
+        +filter_tasks(pet_name: str, completed: bool) list~Task~
+        +detect_conflicts(candidate: ScheduledItem, items: list~ScheduledItem~) list~ScheduledItem~
+        +explain_plan(plan: DailyPlan) str
+    }
+
+    class DailyPlan {
+        +date plan_date
+        +list~ScheduledItem~ items
+        +total_minutes() int
+    }
+
+    class ScheduledItem {
+        +Task task
+        +Pet pet
+        +time start_time
+        +time end_time
+        +str reason
+    }
+
+    note for Owner "add_availability() raises ValueError\nif the new window overlaps an existing one."
+    note for TimeWindow "start must be before end;\notherwise raises ValueError."
+    note for Scheduler "Tasks are never split across windows.\nIf a task doesn't fit, try the next window;\nif it fits in none, leave it out of the plan.\nA set-time task that conflicts with a scheduled one\nis left out of the plan."
+
+    Owner "1" *-- "*" Pet : owns
+    Owner "1" *-- "*" TimeWindow : available during
+    Pet "1" *-- "*" Task : has
+    Scheduler --> Owner : reads from
+    Scheduler ..> DailyPlan : creates
+    DailyPlan "1" *-- "*" ScheduledItem : contains
+    ScheduledItem --> Task : schedules
+    ScheduledItem --> Pet : for
