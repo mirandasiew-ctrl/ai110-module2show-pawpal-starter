@@ -4,7 +4,20 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import date, time
-from typing import Optional
+from typing import ClassVar, Optional
+
+# Lower number = higher priority. Used for sorting and for validating Task.priority.
+PRIORITY_ORDER = {"high": 0, "medium": 1, "low": 2}
+
+
+def to_minutes(t: time) -> int:
+    """Convert a time to minutes since midnight (datetime.time has no arithmetic)."""
+    pass
+
+
+def from_minutes(minutes: int) -> time:
+    """Convert minutes since midnight back to a time."""
+    pass
 
 
 @dataclass
@@ -40,6 +53,12 @@ class Task:
     time: Optional[time] = None  # required start time, e.g. meds at 08:00; None lets the scheduler choose
     frequency: str = "daily"  # "daily", "weekly", or "once"
     completed: bool = False
+    pet_id: Optional[int] = None  # set by Pet
+
+    def __post_init__(self) -> None:
+        # TODO: raise ValueError if priority is not in PRIORITY_ORDER
+        # TODO: raise ValueError if duration_minutes is not greater than 0
+        pass
 
     def mark_complete(self) -> None:
         pass
@@ -53,11 +72,24 @@ class Pet:
     age: int = 0
     special_needs: list[str] = field(default_factory=list)
     tasks: list[Task] = field(default_factory=list)
+    pet_id: int = field(init=False)
+
+    _max_pet_id: ClassVar[int] = 0  # greatest pet_id assigned so far
+
+    def __post_init__(self) -> None:
+        # TODO: set pet_id to _max_pet_id + 1, then update _max_pet_id
+        # TODO: set pet_id on any tasks passed in through `tasks`
+        pass
 
     def add_task(self, task: Task) -> None:
+        """Add a task and set its pet_id to this pet's id.
+
+        Raises ValueError if the task already belongs to a different pet.
+        """
         pass
 
     def remove_task(self, description: str) -> None:
+        """Remove the task and set its pet_id back to None."""
         pass
 
     def get_pending_tasks(self) -> list[Task]:
@@ -70,10 +102,19 @@ class Owner:
     availability: list[TimeWindow] = field(default_factory=list)
     pets: list[Pet] = field(default_factory=list)
 
-    def add_pet(self, pet: Pet) -> None:
+    def __post_init__(self) -> None:
+        # TODO: raise ValueError if any windows passed in through `availability` overlap
+        # TODO: raise ValueError if any pets passed in through `pets` share a pet_id
         pass
 
-    def remove_pet(self, name: str) -> None:
+    def add_pet(self, pet: Pet) -> None:
+        """Add a pet. Raises ValueError if a pet with the same pet_id is already added."""
+        pass
+
+    def remove_pet(self, pet_id: int) -> None:
+        pass
+
+    def get_pet(self, pet_id: int) -> Optional[Pet]:
         pass
 
     def get_all_tasks(self) -> list[Task]:
@@ -89,8 +130,7 @@ class Owner:
 
 @dataclass
 class ScheduledItem:
-    task: Task
-    pet: Pet
+    task: Task  # task.pet_id identifies the pet
     start_time: time
     end_time: time
     reason: str
@@ -108,24 +148,36 @@ class DailyPlan:
 class Scheduler:
     """Builds a daily plan from the owner's pets, tasks, and availability.
 
-    Tasks are never split across windows. If a task doesn't fit, try the next
-    window; if it fits in none, leave it out of the plan.
+    Only pending (not completed) tasks are planned. Completed tasks do not
+    reset, so frequency is stored but does not change the plan.
 
-    A set-time task that conflicts with one already scheduled is left out of
-    the plan.
+    1. Set-time tasks are placed first, in priority order. One that doesn't fit
+       entirely inside a window (window.fits(task.time, task.duration_minutes)),
+       or conflicts with a task already placed, is left out of the plan.
+    2. The free gaps are the windows (sorted by start time) minus the set-time
+       tasks.
+    3. Remaining tasks, in priority order, go into the first gap they fit; that
+       gap then shrinks. Earlier gaps stay usable by later, shorter tasks.
+       A gap shrunk to zero length is removed, not kept as a TimeWindow.
+
+    Tasks are never split across gaps. A task that fits in no gap is left out
+    of the plan.
     """
 
     def __init__(self, owner: Owner) -> None:
         self.owner = owner
 
     def generate_plan(self) -> DailyPlan:
+        """Build today's plan. Items are sorted by start_time before returning,
+        since set-time tasks are placed before the others."""
         pass
 
     def sort_by_priority(self, tasks: list[Task]) -> list[Task]:
+        """Sort by PRIORITY_ORDER; ties go to the shorter task first."""
         pass
 
     def filter_tasks(
-        self, pet_name: Optional[str] = None, completed: Optional[bool] = None
+        self, pet_id: Optional[int] = None, completed: Optional[bool] = None
     ) -> list[Task]:
         pass
 
@@ -134,11 +186,21 @@ class Scheduler:
     ) -> list[ScheduledItem]:
         """Return the already-scheduled items that overlap `candidate`.
 
-        If any are returned, the candidate is not added to the plan. Set-time
-        tasks are placed in priority order, so the higher-priority task keeps
-        its slot.
+        Only needed for set-time tasks; other tasks are placed in free gaps,
+        which can't overlap anything. If any are returned, the candidate is
+        left out of the plan.
+        """
+        pass
+
+    def find_free_gaps(self, placed: list[ScheduledItem]) -> list[TimeWindow]:
+        """Return the owner's windows, sorted by start, minus the placed items.
+
+        Zero-length gaps (e.g. a set-time task at the very start of a window)
+        are skipped, since TimeWindow requires start < end.
         """
         pass
 
     def explain_plan(self, plan: DailyPlan) -> str:
+        """Describe each item. If the task's pet was removed (get_pet returns
+        None), label it as a removed pet instead of failing."""
         pass

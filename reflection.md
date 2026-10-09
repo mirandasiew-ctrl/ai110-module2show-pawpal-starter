@@ -5,12 +5,31 @@
 **a. Initial design**
 
 - Briefly describe your initial UML design.
+My initial UML design models one owner who has one or more pets. Each pet has its own care tasks, and a scheduler fits those tasks into the owner's available time to build a plan for the day. I started with four classes (Owner, Pet, Task, Scheduler) and added three supporting classes (TimeWindow, DailyPlan, ScheduledItem) once it was clear the scheduler needed to know when the owner is free and needed somewhere to put its output.
+
 - What classes did you include, and what responsibilities did you assign to each?
+Owner: stores the owner's name, their pets, and their availability as a list of time windows. It adds and removes pets, collects every pet's tasks, adds availability windows (rejecting any that overlap an existing window), and totals the available minutes.
+
+TimeWindow: one block of free time with a start and an end. It validates that the start is before the end, reports its length, checks whether a task of a given length fits starting at a given time, and checks whether it overlaps another window.
+
+Pet: stores the pet's details (name, species, breed, age, special needs) and its list of tasks. It adds and removes tasks and returns the ones not yet completed.
+
+Task: a single care activity with a description, duration, priority, optional set time (e.g., meds at 08:00), frequency, and completion status. It can be marked complete.
+
+Scheduler: holds the scheduling logic. It sorts tasks by priority, filters them by pet or status, and generates the daily plan. It places set-time tasks first and leaves out any that conflict with a task already scheduled, then fills each window with the remaining tasks in priority order. Tasks are never split across windows, and a task that fits in no window is left out. It also explains the resulting plan.
+
+DailyPlan: the output for one day, holding the date and the list of scheduled items, and totaling the scheduled minutes.
+
+ScheduledItem: one entry in the plan, linking a task and its pet to a start time, an end time, and a short reason it was placed there.
 
 **b. Design changes**
 
 - Did your design change during implementation?
+Yes.
+
 - If yes, describe at least one change and why you made it.
+Missing Task - Pet relationship. 
+Owner.get_all_tasks() returns a list[Task], and a Task doesn't record which pet it belongs to. Once tasks come out of get_all_tasks(), the scheduler can't tell whose task it is. filter_tasks() has the same problem
 
 ---
 

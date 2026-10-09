@@ -4,7 +4,8 @@ classDiagram
         +list~TimeWindow~ availability
         +list~Pet~ pets
         +add_pet(pet: Pet) None
-        +remove_pet(name: str) None
+        +remove_pet(pet_id: int) None
+        +get_pet(pet_id: int) Pet
         +get_all_tasks() list~Task~
         +add_availability(window: TimeWindow) None
         +total_available_minutes() int
@@ -19,6 +20,7 @@ classDiagram
     }
 
     class Pet {
+        +int pet_id
         +str name
         +str species
         +str breed
@@ -37,6 +39,7 @@ classDiagram
         +time time
         +str frequency
         +bool completed
+        +int pet_id
         +mark_complete() None
     }
 
@@ -44,8 +47,9 @@ classDiagram
         +Owner owner
         +generate_plan() DailyPlan
         +sort_by_priority(tasks: list~Task~) list~Task~
-        +filter_tasks(pet_name: str, completed: bool) list~Task~
+        +filter_tasks(pet_id: int, completed: bool) list~Task~
         +detect_conflicts(candidate: ScheduledItem, items: list~ScheduledItem~) list~ScheduledItem~
+        +find_free_gaps(placed: list~ScheduledItem~) list~TimeWindow~
         +explain_plan(plan: DailyPlan) str
     }
 
@@ -57,21 +61,23 @@ classDiagram
 
     class ScheduledItem {
         +Task task
-        +Pet pet
         +time start_time
         +time end_time
         +str reason
     }
 
-    note for Owner "add_availability() raises ValueError\nif the new window overlaps an existing one."
+    note for Owner "add_pet() raises ValueError if the pet\nis already added.\nadd_availability() raises ValueError\nif the new window overlaps an existing one.\nThe same checks run on lists passed\ninto the constructor."
+    note for Pet "pet_id is set when the Pet is created:\ngreatest pet_id assigned so far + 1.\nTasks passed in or added get this pet_id.\nadd_task() raises ValueError if the task\nalready belongs to a different pet.\nremove_task() sets the task's pet_id to None."
+    note for Task "priority must be high, medium, or low;\nduration_minutes must be greater than 0;\notherwise raises ValueError."
     note for TimeWindow "start must be before end;\notherwise raises ValueError."
-    note for Scheduler "Tasks are never split across windows.\nIf a task doesn't fit, try the next window;\nif it fits in none, leave it out of the plan.\nA set-time task that conflicts with a scheduled one\nis left out of the plan."
+    note for Scheduler "Only pending tasks are planned.\n1. Set-time tasks first, by priority. Left out if not\nentirely inside a window or conflicting with a placed task.\n2. Free gaps = windows minus set-time tasks.\n3. Other tasks, by priority (ties to shorter), go\ninto the first gap they fit; that gap shrinks.\nZero-length gaps are dropped.\nTasks are never split; a task that fits in\nno gap is left out of the plan.\nPlan items are sorted by start_time."
 
     Owner "1" *-- "*" Pet : owns
     Owner "1" *-- "*" TimeWindow : available during
     Pet "1" *-- "*" Task : has
+    Task ..> Pet : pet_id
     Scheduler --> Owner : reads from
     Scheduler ..> DailyPlan : creates
+    Scheduler ..> TimeWindow : finds free gaps as
     DailyPlan "1" *-- "*" ScheduledItem : contains
     ScheduledItem --> Task : schedules
-    ScheduledItem --> Pet : for
