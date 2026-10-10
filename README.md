@@ -53,6 +53,14 @@ Paste a sample of your app's CLI or Streamlit output here so a reader can see wh
 #   09:00 — Feeding (10 min) [priority: high]
 #   ...
 ```
+Plan for Saturday, October 10:
+  07:00-07:30  Morning walk (Mochi): high priority; earliest free slot that fits
+  07:30-07:35  Morning meds (Mochi): high priority; set for 07:30
+  07:35-07:55  Play session (Luna): medium priority; earliest freeslot that fits
+  07:55-08:10  Brushing (Luna): low priority; earliest free slot that fits
+  18:00-18:10  Feeding (Luna): high priority; set for 18:00
+  18:30-19:15  Evening walk (Mochi): medium priority; set for 18:30
+Total scheduled: 125 minutes
 
 ## 🧪 Testing PawPal+
 
@@ -71,15 +79,16 @@ Sample test output:
 ```
 
 ## 📐 Smarter Scheduling
+This system plans one day of pet care for an owner with several pets, fitting tasks into the times the owner is free. It has the following classes: Owner, TimeWindow, Pet, Task, Scheduler, DailyPlan and ScheduledItem. Owner holds the owner's pets and free time. TimeWindow holds the free periods of the Owner. Pet holds a pet's details and its tasks. Task holds care activities. Scheduler builds the plan. It reads tasks from the owner so one plan covers every pet. DailyPlan and ScheduledItem are the result: a list of tasks, each with a start time, an end time and the reason it was placed there.
 
 > Fill in once you've implemented scheduling logic.
 
 | Feature | Method(s) | Notes |
 |---------|-----------|-------|
-| Task sorting | | e.g., by priority, duration |
-| Filtering | | e.g., skip tasks if time runs out |
-| Conflict handling | | e.g., overlapping time slots |
-| Recurring tasks | | e.g., daily vs. weekly |
+| Task sorting |Scheduler.sort_by_priority() | Sort by PRIORITY_ORDER; ties go to the shorter task first. |
+| Filtering |Scheduler.filter_tasks | Start from self.owner.get_all_tasks(), then filter by pet_id and/or completed. |
+| Conflict handling |Scheduler.detect_conflicts, TimeWindow.overlaps() | A set-time task that overlaps one already placed is left out (higher priority wins); overlapping availability windows are rejected. |
+| Recurring tasks |Task.mark_complete(), Pet.complete_task(), Task.is_due() | Daily → next day, weekly → +7 days, once → no repeat; plans include only tasks due that day |
 
 ## 📸 Demo Walkthrough
 

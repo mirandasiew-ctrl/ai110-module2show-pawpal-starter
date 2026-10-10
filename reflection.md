@@ -52,13 +52,18 @@ Owner.get_all_tasks() returns a list[Task], and a Task doesn't record which pet 
 **a. How you used AI**
 
 - How did you use AI tools during this project (for example: design brainstorming, debugging, refactoring)?
+I use AI tools for design brainstorming, generate class diagram, implentation, and testing.
+
 - What kinds of prompts or questions were most helpful?
+The most helpful prompts asked the AI to review and explain during design phase. This confirmed the design meeting requirements and no missing relationships and potential logic bottlenecks. Broad requests like "implement the classes" worked well only after the design had been reviewed several times.
 
 **b. Judgment and verification**
 
 - Describe one moment where you did not accept an AI suggestion as-is.
-- How did you evaluate or verify what the AI suggested?
+One moment was on the ScheduledItem.pet field. I questioned it, and the AI agreed it wasn't needed.
 
+- How did you evaluate or verify what the AI suggested?
+I reviewed the classes and fields AI suggested, questioned them when they didn't make sense for me or I didn't understand. Then the AI explained it or the AI agreed with me and made the changes accordingly. After implementation, the AI generated comprehensive test cases and ran for me to verify. 
 ---
 
 ## 4. Testing and Verification
