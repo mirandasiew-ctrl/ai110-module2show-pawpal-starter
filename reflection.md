@@ -43,7 +43,10 @@ Owner.get_all_tasks() returns a list[Task], and a Task doesn't record which pet 
 **b. Tradeoffs**
 
 - Describe one tradeoff your scheduler makes.
+The scheduler is greedy and priority-first: it places one task at a time, highest priority first, and never goes back to rearrange what it has already placed. When two set-time tasks overlap (for the same pet or different pets), the higher-priority one keeps its time and the other is left out of the plan rather than moved to a nearby free slot. Flexible tasks go into the first free gap that fits, so the plan isn't always the one that fits the most tasks. For example, a long task can take up an early gap that two shorter tasks could have shared. Instead of searching for a better arrangement, the plan lists every skipped task with the reason, e.g. "Breakfast (Luna): set for 07:30, conflicts with Morning meds (Mochi) at 07:30-07:35", and the app warns when a new task clashes with another.
+
 - Why is that tradeoff reasonable for this scenario?
+A pet owner's day has a handful of tasks, not hundreds, so the extra tasks an optimal search might fit in are few, while a greedy plan is fast, predictable, and easy to explain. Priority-first also matches what matters: meds and feeding should never lose their slot to a lower-priority task like brushing. A set time usually means something (meds at 08:00), so quietly moving a clashing task could do more harm than leaving it out and telling the owner, who can then decide whether to change the time.
 
 ---
 

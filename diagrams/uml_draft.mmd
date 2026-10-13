@@ -7,7 +7,10 @@ classDiagram
         +remove_pet(pet_id: int) None
         +get_pet(pet_id: int) Pet
         +get_all_tasks() list~Task~
+        +move_task(task: Task, to_pet_id: int) None
         +add_availability(window: TimeWindow) None
+        +remove_availability(window: TimeWindow) None
+        +update_availability(old: TimeWindow, new: TimeWindow) None
         +total_available_minutes() int
     }
 
@@ -28,7 +31,7 @@ classDiagram
         +list~str~ special_needs
         +list~Task~ tasks
         +add_task(task: Task) None
-        +remove_task(description: str) None
+        +remove_task(task: Task | str) None
         +complete_task(task: Task) Task
         +get_pending_tasks() list~Task~
     }
@@ -42,6 +45,7 @@ classDiagram
         +bool completed
         +int pet_id
         +date due_date
+        +update(changes) None
         +is_due(on: date) bool
         +mark_complete() Task
     }
@@ -50,8 +54,10 @@ classDiagram
         +Owner owner
         +generate_plan(plan_date: date) DailyPlan
         +sort_by_priority(tasks: list~Task~) list~Task~
-        +filter_tasks(pet_id: int, completed: bool, due_on: date) list~Task~
+        +sort_by_time(tasks: list~Task~) list~Task~
+        +filter_tasks(pet_id: int, completed: bool, due_on: date, pet_name: str) list~Task~
         +detect_conflicts(candidate: ScheduledItem, items: list~ScheduledItem~) list~ScheduledItem~
+        +find_conflicts(plan_date: date) list~tuple~Task, Task~~
         +find_free_gaps(placed: list~ScheduledItem~) list~TimeWindow~
         +explain_plan(plan: DailyPlan) str
     }
@@ -59,6 +65,7 @@ classDiagram
     class DailyPlan {
         +date plan_date
         +list~ScheduledItem~ items
+        +list~SkippedTask~ skipped
         +total_minutes() int
     }
 
@@ -69,11 +76,16 @@ classDiagram
         +str reason
     }
 
+    class SkippedTask {
+        +Task task
+        +str reason
+    }
+
     note for Owner "add_pet() raises ValueError if the pet\nis already added.\nadd_availability() raises ValueError\nif the new window overlaps an existing one.\nThe same checks run on lists passed\ninto the constructor."
     note for Pet "pet_id is set when the Pet is created:\ngreatest pet_id assigned so far + 1.\nTasks passed in or added get this pet_id.\nadd_task() raises ValueError if the task\nalready belongs to a different pet or is already added.\nremove_task() sets the task's pet_id to None;\nraises ValueError if no task has that description."
     note for Task "priority must be high, medium, or low;\nfrequency must be daily, weekly, or once;\nduration_minutes must be greater than 0;\notherwise raises ValueError.\nmark_complete() returns the next occurrence:\ndaily +1 day, weekly +7 days, once None."
     note for TimeWindow "start must be before end;\notherwise raises ValueError."
-    note for Scheduler "Only tasks due on the plan date are planned.\n1. Set-time tasks first, by priority. Left out if not\nentirely inside a window or conflicting with a placed task.\n2. Free gaps = windows minus set-time tasks.\n3. Other tasks, by priority (ties to shorter), go\ninto the first gap they fit; that gap shrinks.\nZero-length gaps are dropped.\nTasks are never split; a task that fits in\nno gap is left out of the plan.\nPlan items are sorted by start_time."
+    note for Scheduler "Only tasks due on the plan date are planned.\n1. Set-time tasks first, by priority. Left out if not\nentirely inside a window or conflicting with a placed task.\n2. Free gaps = windows minus set-time tasks.\n3. Other tasks, by priority (ties to shorter), go\ninto the first gap they fit; that gap shrinks.\nZero-length gaps are dropped.\nTasks are never split; a task that fits in\nno gap is left out of the plan.\nEvery task left out goes in plan.skipped\nwith the reason.\nPlan items are sorted by start_time."
 
     Owner "1" *-- "*" Pet : owns
     Owner "1" *-- "*" TimeWindow : available during
@@ -84,3 +96,5 @@ classDiagram
     Scheduler ..> TimeWindow : finds free gaps as
     DailyPlan "1" *-- "*" ScheduledItem : contains
     ScheduledItem --> Task : schedules
+    DailyPlan "1" *-- "*" SkippedTask : leaves out
+    SkippedTask --> Task : skips

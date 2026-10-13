@@ -161,6 +161,65 @@ def test_remove_task_resets_pet_id():
         mochi.remove_task("Walk")
 
 
+# --- Editing ----------------------------------------------------------------
+
+
+def test_task_update_changes_fields():
+    task = Task("Walk", 30, "high")
+    task.update(description="Long walk", duration_minutes=45, priority="medium", time=time(7, 0))
+    assert (task.description, task.duration_minutes, task.priority, task.time) == (
+        "Long walk", 45, "medium", time(7, 0)
+    )
+
+
+def test_invalid_task_update_changes_nothing():
+    task = Task("Walk", 30, "high")
+    with pytest.raises(ValueError):
+        task.update(description="Long walk", priority="urgent")
+    assert (task.description, task.priority) == ("Walk", "high")
+
+
+def test_remove_task_by_object_removes_that_exact_task():
+    mochi = Pet("Mochi", "dog")
+    first, second = Task("Walk", 30, "high"), Task("Walk", 30, "high")
+    mochi.add_task(first)
+    mochi.add_task(second)
+    mochi.remove_task(second)
+    assert len(mochi.tasks) == 1 and mochi.tasks[0] is first
+
+
+def test_move_task_to_another_pet():
+    owner = Owner("Jordan")
+    mochi = Pet("Mochi", "dog", tasks=[Task("Walk", 30, "high")])
+    luna = Pet("Luna", "cat")
+    owner.add_pet(mochi)
+    owner.add_pet(luna)
+    walk = mochi.tasks[0]
+
+    owner.move_task(walk, luna.pet_id)
+
+    assert mochi.tasks == [] and luna.tasks[0] is walk
+    assert walk.pet_id == luna.pet_id
+
+
+def test_update_availability_keeps_old_window_if_new_one_overlaps():
+    owner = make_owner((time(7, 0), time(9, 0)), (time(18, 0), time(19, 0)))
+    evening = owner.availability[1]
+
+    with pytest.raises(ValueError):
+        owner.update_availability(evening, TimeWindow(time(8, 0), time(10, 0)))
+    assert evening in owner.availability
+
+    owner.update_availability(evening, TimeWindow(time(17, 0), time(19, 0)))
+    assert owner.total_available_minutes() == 120 + 120
+
+
+def test_remove_availability():
+    owner = make_owner((time(7, 0), time(9, 0)))
+    owner.remove_availability(owner.availability[0])
+    assert owner.availability == []
+
+
 # --- Owner ------------------------------------------------------------------
 
 
@@ -203,6 +262,28 @@ def test_sort_by_priority_breaks_ties_with_shorter_task():
     ]
     ordered = Scheduler(Owner("Jordan")).sort_by_priority(tasks)
     assert [t.description for t in ordered] == ["Short high", "Long high", "Medium", "Low"]
+
+
+def test_sort_by_time_puts_earliest_first_and_flexible_tasks_last():
+    tasks = [
+        Task("Flexible low", 10, "low"),
+        Task("Evening meds", 5, "high", time=time(18, 0)),
+        Task("Flexible high", 20, "high"),
+        Task("Breakfast", 10, "medium", time=time(7, 30)),
+        Task("Morning meds", 5, "high", time=time(7, 30)),
+    ]
+    ordered = Scheduler(Owner("Jordan")).sort_by_time(tasks)
+    assert [t.description for t in ordered] == [
+        "Morning meds",
+        "Breakfast",
+        "Evening meds",
+        "Flexible high",
+        "Flexible low",
+    ]
+
+
+def test_sort_by_time_handles_empty_list():
+    assert Scheduler(Owner("Jordan")).sort_by_time([]) == []
 
 
 def test_plan_includes_tasks_from_all_pets():
@@ -272,6 +353,106 @@ def test_conflicting_set_time_task_with_lower_priority_is_left_out():
     assert plan_summary(owner) == [("Mochi meds", time(8, 0), time(8, 10))]
 
 
+def conflict_names(owner: Owner) -> list[tuple[str, str]]:
+    return [(a.description, b.description) for a, b in Scheduler(owner).find_conflicts()]
+
+
+def test_find_conflicts_same_pet_same_time():
+    owner = Owner("Jordan")
+    owner.add_pet(
+        Pet(
+            "Mochi",
+            "dog",
+            tasks=[
+                Task("Breakfast", 10, "medium", time=time(7, 30)),
+                Task("Meds", 5, "high", time=time(7, 30)),
+            ],
+        )
+    )
+    assert conflict_names(owner) == [("Meds", "Breakfast")]
+
+
+def test_find_conflicts_different_pets_partial_overlap():
+    owner = Owner("Jordan")
+    owner.add_pet(Pet("Mochi", "dog", tasks=[Task("Walk", 30, "high", time=time(7, 30))]))
+    owner.add_pet(Pet("Luna", "cat", tasks=[Task("Feeding", 10, "high", time=time(7, 45))]))
+    assert conflict_names(owner) == [("Walk", "Feeding")]
+
+
+def test_find_conflicts_lists_every_overlapping_pair():
+    owner = Owner("Jordan")
+    owner.add_pet(
+        Pet(
+            "Mochi",
+            "dog",
+            tasks=[
+                Task("Walk", 60, "high", time=time(7, 0)),
+                Task("Meds", 5, "high", time=time(7, 10)),
+                Task("Treat", 5, "low", time=time(7, 50)),
+            ],
+        )
+    )
+    assert conflict_names(owner) == [("Walk", "Meds"), ("Walk", "Treat")]
+
+
+def test_find_conflicts_ignores_touching_flexible_completed_and_not_due_tasks():
+    done = Task("Brush", 10, "low", time=time(7, 30))
+    done.mark_complete()
+    owner = Owner("Jordan")
+    owner.add_pet(
+        Pet(
+            "Mochi",
+            "dog",
+            tasks=[
+                Task("Meds", 30, "high", time=time(7, 0)),
+                Task("Walk", 30, "high", time=time(7, 30)),  # starts as Meds ends
+                Task("Play", 20, "low"),  # flexible
+                done,
+                Task("Bath", 30, "low", time=time(7, 0), due_date=TODAY + timedelta(days=1)),
+            ],
+        )
+    )
+    assert conflict_names(owner) == []
+
+
+def test_plan_records_why_each_task_was_skipped():
+    owner = make_owner((time(7, 0), time(8, 0)))
+    owner.add_pet(
+        Pet(
+            "Mochi",
+            "dog",
+            tasks=[
+                Task("Meds", 10, "high", time=time(7, 30)),
+                Task("Late meds", 10, "high", time=time(9, 0)),
+                Task("Hike", 90, "medium"),
+            ],
+        )
+    )
+    owner.add_pet(Pet("Luna", "cat", tasks=[Task("Breakfast", 10, "medium", time=time(7, 35))]))
+
+    plan = Scheduler(owner).generate_plan()
+
+    assert [item.task.description for item in plan.items] == ["Meds"]
+    reasons = {s.task.description: s.reason for s in plan.skipped}
+    assert reasons == {
+        "Late meds": "set for 09:00, outside your available time",
+        "Breakfast": "set for 07:35, conflicts with Meds (Mochi) at 07:30-07:40",
+        "Hike": "no free slot of 90 minutes left",
+    }
+
+
+def test_explain_plan_lists_skipped_tasks():
+    owner = make_owner((time(7, 0), time(8, 0)))
+    owner.add_pet(Pet("Mochi", "dog", tasks=[Task("Hike", 90, "high")]))
+    scheduler = Scheduler(owner)
+
+    text = scheduler.explain_plan(scheduler.generate_plan())
+
+    assert text.startswith("No tasks scheduled")
+    assert "Skipped:" in text
+    assert "Hike (Mochi): no free slot of 90 minutes left" in text
+
+
 def test_completed_and_too_long_tasks_are_left_out():
     done = Task("Brush", 5, "low")
     done.mark_complete()
@@ -300,6 +481,20 @@ def test_filter_tasks_by_pet_and_status():
     scheduler = Scheduler(owner)
     assert [t.description for t in scheduler.filter_tasks(pet_id=mochi.pet_id)] == ["Walk", "Meds"]
     assert {t.description for t in scheduler.filter_tasks(completed=False)} == {"Walk", "Feeding"}
+
+
+def test_filter_tasks_by_pet_name_and_status():
+    owner = Owner("Jordan")
+    mochi = Pet("Mochi", "dog", tasks=[Task("Walk", 30, "high"), Task("Meds", 5, "high")])
+    luna = Pet("Luna", "cat", tasks=[Task("Feeding", 10, "high")])
+    owner.add_pet(mochi)
+    owner.add_pet(luna)
+    mochi.tasks[1].mark_complete()
+
+    scheduler = Scheduler(owner)
+    assert [t.description for t in scheduler.filter_tasks(pet_name="  mochi ")] == ["Walk", "Meds"]
+    assert [t.description for t in scheduler.filter_tasks(pet_name="Mochi", completed=True)] == ["Meds"]
+    assert scheduler.filter_tasks(pet_name="Rex") == []
 
 
 def test_explain_plan_handles_removed_pet():

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field, fields, replace
 from datetime import date, time, timedelta
 from typing import ClassVar, Optional
 
@@ -85,6 +85,17 @@ class Task:
         if self.duration_minutes <= 0:
             raise ValueError("duration_minutes must be greater than 0")
 
+    def update(self, **changes) -> None:
+        """Change fields with the same validation as a new task; nothing changes if invalid.
+
+        Use Owner.move_task() to move a task to a different pet.
+        """
+        if "pet_id" in changes:
+            raise ValueError("Use Owner.move_task() to change a task's pet")
+        updated = replace(self, **changes)  # runs __post_init__ validation
+        for f in fields(self):
+            setattr(self, f.name, getattr(updated, f.name))
+
     def is_due(self, on: date) -> bool:
         """Return True if the task is not completed and is due on or before `on`."""
         return not self.completed and self.due_date <= on
@@ -140,18 +151,20 @@ class Pet:
         task.pet_id = self.pet_id
         self.tasks.append(task)
 
-    def remove_task(self, description: str) -> None:
+    def remove_task(self, task: Task | str) -> None:
         """Remove the task and set its pet_id back to None.
 
-        Removes the first task with this description. Raises ValueError if
-        there is none.
+        Pass the Task itself, or a description to remove the first task with
+        that description. Raises ValueError if there is no match.
         """
-        for i, task in enumerate(self.tasks):
-            if task.description == description:
+        for i, t in enumerate(self.tasks):
+            matches = (t is task) if isinstance(task, Task) else (t.description == task)
+            if matches:
                 del self.tasks[i]
-                task.pet_id = None
+                t.pet_id = None
                 return
-        raise ValueError(f"{self.name} has no task {description!r}")
+        label = task.description if isinstance(task, Task) else task
+        raise ValueError(f"{self.name} has no task {label!r}")
 
     def complete_task(self, task: Task) -> Optional[Task]:
         """Mark one of this pet's tasks complete and add its next occurrence, if any."""
@@ -206,6 +219,17 @@ class Owner:
         """Return every task across all of this owner's pets."""
         return [task for pet in self.pets for task in pet.tasks]
 
+    def move_task(self, task: Task, to_pet_id: int) -> None:
+        """Move a task from its current pet to another of this owner's pets."""
+        new_pet = self.get_pet(to_pet_id)
+        old_pet = self.get_pet(task.pet_id)
+        if new_pet is None or old_pet is None:
+            raise ValueError("Both pets must belong to this owner")
+        if new_pet is old_pet:
+            return
+        old_pet.remove_task(task)
+        new_pet.add_task(task)
+
     def add_availability(self, window: TimeWindow) -> None:
         """Add a window. Raises ValueError if it overlaps an existing window."""
         for existing in self.availability:
@@ -215,6 +239,26 @@ class Owner:
                     f"{existing.start:%H:%M}-{existing.end:%H:%M} window"
                 )
         self.availability.append(window)
+
+    def remove_availability(self, window: TimeWindow) -> None:
+        """Remove this window. Raises ValueError if it isn't one of the owner's windows."""
+        for i, w in enumerate(self.availability):
+            if w is window:
+                del self.availability[i]
+                return
+        raise ValueError("That window isn't in your availability")
+
+    def update_availability(self, old: TimeWindow, new: TimeWindow) -> None:
+        """Replace a window, keeping the old one if the new one overlaps another window."""
+        index = next((i for i, w in enumerate(self.availability) if w is old), None)
+        if index is None:
+            raise ValueError("That window isn't in your availability")
+        del self.availability[index]
+        try:
+            self.add_availability(new)
+        except ValueError:
+            self.availability.insert(index, old)
+            raise
 
     def total_available_minutes(self) -> int:
         """Return the combined length of all availability windows in minutes."""
@@ -230,9 +274,20 @@ class ScheduledItem:
 
 
 @dataclass
+class SkippedTask:
+    """A due task that generate_plan() left out: its set time is outside the
+    owner's windows, it conflicts with a higher-priority set-time task, or no
+    free gap is long enough."""
+
+    task: Task  # task.pet_id identifies the pet
+    reason: str  # why it was left out of the plan
+
+
+@dataclass
 class DailyPlan:
     plan_date: date
     items: list[ScheduledItem] = field(default_factory=list)
+    skipped: list[SkippedTask] = field(default_factory=list)
 
     def total_minutes(self) -> int:
         """Return the total scheduled time in minutes."""
@@ -260,7 +315,7 @@ class Scheduler:
        A gap shrunk to zero length is removed, not kept as a TimeWindow.
 
     Tasks are never split across gaps. A task that fits in no gap is left out
-    of the plan.
+    of the plan. Every task left out goes in DailyPlan.skipped with the reason.
     """
 
     def __init__(self, owner: Owner) -> None:
@@ -272,7 +327,8 @@ class Scheduler:
         filter_tasks(due_on=plan_date).
 
         Items are sorted by start_time before returning, since set-time tasks
-        are placed before the others.
+        are placed before the others. Tasks left out go in plan.skipped, in the
+        order they were tried, each with the reason (see the class docstring).
         """
         plan_date = plan_date or date.today()
         pending = self.filter_tasks(due_on=plan_date)
@@ -280,10 +336,14 @@ class Scheduler:
         flexible_tasks = self.sort_by_priority([t for t in pending if t.time is None])
 
         placed: list[ScheduledItem] = []
+        skipped: list[SkippedTask] = []
 
         # 1. Set-time tasks
         for task in set_time_tasks:
             if not any(w.fits(task.time, task.duration_minutes) for w in self.owner.availability):
+                skipped.append(
+                    SkippedTask(task, f"set for {task.time:%H:%M}, outside your available time")
+                )
                 continue
             item = ScheduledItem(
                 task=task,
@@ -291,7 +351,17 @@ class Scheduler:
                 end_time=from_minutes(to_minutes(task.time) + task.duration_minutes),
                 reason=f"{task.priority} priority; set for {task.time:%H:%M}",
             )
-            if self.detect_conflicts(item, placed):
+            conflicts = self.detect_conflicts(item, placed)
+            if conflicts:
+                other = conflicts[0]
+                skipped.append(
+                    SkippedTask(
+                        task,
+                        f"set for {task.time:%H:%M}, conflicts with {other.task.description} "
+                        f"({self._pet_name(other.task)}) at "
+                        f"{other.start_time:%H:%M}-{other.end_time:%H:%M}",
+                    )
+                )
                 continue
             placed.append(item)
 
@@ -317,24 +387,54 @@ class Scheduler:
                 else:
                     gaps[i] = TimeWindow(end, gap.end)
                 break
+            else:
+                skipped.append(
+                    SkippedTask(task, f"no free slot of {task.duration_minutes} minutes left")
+                )
 
         placed.sort(key=lambda item: item.start_time)
-        return DailyPlan(plan_date=plan_date, items=placed)
+        return DailyPlan(plan_date=plan_date, items=placed, skipped=skipped)
 
     def sort_by_priority(self, tasks: list[Task]) -> list[Task]:
         """Sort by PRIORITY_ORDER; ties go to the shorter task first."""
         return sorted(tasks, key=lambda t: (PRIORITY_ORDER[t.priority], t.duration_minutes))
+
+    def sort_by_time(self, tasks: list[Task]) -> list[Task]:
+        """Sort set-time tasks by start time, earliest first; flexible tasks go last.
+
+        Tasks set for the same time, and flexible tasks, are ordered by
+        sort_by_priority's rule (priority, then shorter task first).
+        """
+        return sorted(
+            tasks,
+            key=lambda t: (
+                t.time is None,
+                t.time or time.min,  # placeholder so None is never compared to a time
+                PRIORITY_ORDER[t.priority],
+                t.duration_minutes,
+            ),
+        )
 
     def filter_tasks(
         self,
         pet_id: Optional[int] = None,
         completed: Optional[bool] = None,
         due_on: Optional[date] = None,
+        pet_name: Optional[str] = None,
     ) -> list[Task]:
-        """Start from self.owner.get_all_tasks(), then filter by pet_id, completed, and/or due_on."""
+        """Start from self.owner.get_all_tasks(), then filter by pet_id, pet_name,
+        completed, and/or due_on.
+
+        pet_name ignores case and surrounding spaces. Pet names aren't unique,
+        so it keeps tasks from every pet with that name; use pet_id for one pet.
+        """
         tasks = self.owner.get_all_tasks()
         if pet_id is not None:
             tasks = [t for t in tasks if t.pet_id == pet_id]
+        if pet_name is not None:
+            name = pet_name.strip().casefold()
+            pet_ids = {p.pet_id for p in self.owner.pets if p.name.strip().casefold() == name}
+            tasks = [t for t in tasks if t.pet_id in pet_ids]
         if completed is not None:
             tasks = [t for t in tasks if t.completed == completed]
         if due_on is not None:
@@ -355,6 +455,36 @@ class Scheduler:
             for item in items
             if candidate.start_time < item.end_time and item.start_time < candidate.end_time
         ]
+
+    def find_conflicts(self, plan_date: Optional[date] = None) -> list[tuple[Task, Task]]:
+        """Return each pair of set-time tasks due on `plan_date` (default today)
+        whose times overlap, whether they're for the same pet or different pets.
+
+        Each pair is (earlier task, later task); for the same start time, the
+        higher-priority task comes first. Tasks that only touch (one ends as the
+        next starts) don't conflict. Flexible tasks never conflict, since the
+        scheduler places them in free gaps.
+
+        The tasks are sorted by start time, then each one is compared with the
+        tasks after it until one starts at or after it ends; since the rest
+        start even later, none of them can overlap it either.
+
+        Use this to warn the owner before planning. generate_plan() keeps the
+        higher-priority task of each pair (ties go to the shorter task) and
+        puts the other in DailyPlan.skipped.
+        """
+        plan_date = plan_date or date.today()
+        timed = self.sort_by_time([t for t in self.filter_tasks(due_on=plan_date) if t.time is not None])
+
+        conflicts: list[tuple[Task, Task]] = []
+        for i, first in enumerate(timed):
+            first_end = to_minutes(first.time) + first.duration_minutes
+            for second in timed[i + 1 :]:
+                # Sorted by start time, so once one starts after `first` ends, the rest do too.
+                if to_minutes(second.time) >= first_end:
+                    break
+                conflicts.append((first, second))
+        return conflicts
 
     def find_free_gaps(self, placed: list[ScheduledItem]) -> list[TimeWindow]:
         """Return the owner's windows, sorted by start, minus the placed items.
@@ -379,18 +509,29 @@ class Scheduler:
         return gaps
 
     def explain_plan(self, plan: DailyPlan) -> str:
-        """Describe each item. If the task's pet was removed (get_pet returns
-        None), label it as a removed pet instead of failing."""
-        if not plan.items:
-            return f"No tasks scheduled for {plan.plan_date:%A, %B %d}."
+        """Describe each item, then each skipped task and why it was left out.
+        If the task's pet was removed (get_pet returns None), label it as a
+        removed pet instead of failing."""
+        if plan.items:
+            lines = [f"Plan for {plan.plan_date:%A, %B %d}:"]
+            for item in plan.items:
+                lines.append(
+                    f"  {item.start_time:%H:%M}-{item.end_time:%H:%M}  "
+                    f"{item.task.description} ({self._pet_name(item.task)}): {item.reason}"
+                )
+            lines.append(f"Total scheduled: {plan.total_minutes()} minutes")
+        else:
+            lines = [f"No tasks scheduled for {plan.plan_date:%A, %B %d}."]
 
-        lines = [f"Plan for {plan.plan_date:%A, %B %d}:"]
-        for item in plan.items:
-            pet = self.owner.get_pet(item.task.pet_id)
-            pet_name = pet.name if pet is not None else "removed pet"
-            lines.append(
-                f"  {item.start_time:%H:%M}-{item.end_time:%H:%M}  "
-                f"{item.task.description} ({pet_name}): {item.reason}"
-            )
-        lines.append(f"Total scheduled: {plan.total_minutes()} minutes")
+        if plan.skipped:
+            lines.append("Skipped:")
+            for skipped in plan.skipped:
+                lines.append(
+                    f"  {skipped.task.description} ({self._pet_name(skipped.task)}): {skipped.reason}"
+                )
         return "\n".join(lines)
+
+    def _pet_name(self, task: Task) -> str:
+        """Return the name of the task's pet, or "removed pet" if it's gone."""
+        pet = self.owner.get_pet(task.pet_id)
+        return pet.name if pet is not None else "removed pet"

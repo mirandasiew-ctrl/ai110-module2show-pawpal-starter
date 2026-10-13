@@ -79,16 +79,16 @@ Sample test output:
 ```
 
 ## 📐 Smarter Scheduling
-This system plans one day of pet care for an owner with several pets, fitting tasks into the times the owner is free. It has the following classes: Owner, TimeWindow, Pet, Task, Scheduler, DailyPlan and ScheduledItem. Owner holds the owner's pets and free time. TimeWindow holds the free periods of the Owner. Pet holds a pet's details and its tasks. Task holds care activities. Scheduler builds the plan. It reads tasks from the owner so one plan covers every pet. DailyPlan and ScheduledItem are the result: a list of tasks, each with a start time, an end time and the reason it was placed there.
+This system plans one day of pet care for an owner with several pets, fitting tasks into the times the owner is free. It has the following classes: Owner, TimeWindow, Pet, Task, Scheduler, DailyPlan, ScheduledItem and SkippedTask. Owner holds the owner's pets and free time. TimeWindow holds the free periods of the Owner. Pet holds a pet's details and its tasks. Task holds care activities. Scheduler builds the plan. It reads tasks from the owner so one plan covers every pet. DailyPlan, ScheduledItem and SkippedTask are the result: a list of scheduled tasks, each with a start time, an end time and the reason it was placed there, plus a list of tasks that were left out and why.
 
 > Fill in once you've implemented scheduling logic.
 
 | Feature | Method(s) | Notes |
 |---------|-----------|-------|
-| Task sorting |Scheduler.sort_by_priority() | Sort by PRIORITY_ORDER; ties go to the shorter task first. |
-| Filtering |Scheduler.filter_tasks | Start from self.owner.get_all_tasks(), then filter by pet_id and/or completed. |
-| Conflict handling |Scheduler.detect_conflicts, TimeWindow.overlaps() | A set-time task that overlaps one already placed is left out (higher priority wins); overlapping availability windows are rejected. |
-| Recurring tasks |Task.mark_complete(), Pet.complete_task(), Task.is_due() | Daily → next day, weekly → +7 days, once → no repeat; plans include only tasks due that day |
+| Task sorting |Scheduler.sort_by_priority(), Scheduler.sort_by_time() | sort_by_priority: by PRIORITY_ORDER; ties go to the shorter task first. sort_by_time: set-time tasks earliest first, flexible tasks last; ties use the priority rule. |
+| Filtering |Scheduler.filter_tasks() | Start from self.owner.get_all_tasks(), then filter by any mix of pet_id, pet_name, completed and due_on; a task must match all of them. pet_name ignores case and surrounding spaces, and keeps tasks from every pet with that name (use pet_id for one pet). due_on keeps tasks not completed and due on or before that date. |
+| Conflict handling |Scheduler.find_conflicts(), Scheduler.detect_conflicts(), DailyPlan.skipped, TimeWindow.overlaps() | find_conflicts lists every pair of set-time tasks due that day whose times overlap, for the same or different pets (tasks that only touch don't conflict); the app warns when a new or edited task clashes. While planning, a set-time task that overlaps one already placed is left out (higher priority wins) and added to plan.skipped with the reason, along with tasks outside the owner's free time or with no free slot long enough. Overlapping availability windows are rejected. |
+| Recurring tasks |Task.mark_complete(), Pet.complete_task(), Task.is_due() | Pet.complete_task marks the task done and adds the next occurrence to the same pet: daily → +1 day, weekly → +7 days (with timedelta), once → no repeat. The next date counts from the due date or today, whichever is later, so an overdue task comes back tomorrow, not in the past. Plans include only tasks due that day. |
 
 ## 📸 Demo Walkthrough
 
