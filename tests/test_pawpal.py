@@ -5,7 +5,7 @@ from datetime import date, time, timedelta
 import pytest
 
 import pawpal_system
-from pawpal_system import Owner, Pet, Scheduler, Task, TimeWindow
+from pawpal_system import Owner, Pet, Priority, Scheduler, Task, TimeWindow
 
 
 def make_owner(*windows: tuple[time, time]) -> Owner:
@@ -48,6 +48,46 @@ def test_task_rejects_unknown_priority_and_non_positive_duration():
         Task("Walk", 30, "urgent")
     with pytest.raises(ValueError):
         Task("Walk", 0, "high")
+
+
+@pytest.mark.parametrize(
+    "given, expected",
+    [("high", Priority.HIGH), ("Medium", Priority.MEDIUM), (" LOW ", Priority.LOW), (Priority.HIGH, Priority.HIGH)],
+)
+def test_task_priority_becomes_a_priority_level(given, expected):
+    task = Task("Walk", 30, given)
+    assert task.priority is expected
+    assert task.priority == expected.value  # still equal to the plain string
+
+
+@pytest.mark.parametrize(
+    "description, emoji",
+    [
+        ("Morning walk", "🦮"),
+        ("Evening meds", "💊"),
+        ("Feeding", "🥣"),  # "feeding" starts with "feed"
+        ("Lunch treat", "🦴"),  # treat is checked before meals
+        ("Vet call", "🩺"),  # vet is checked before meds
+        ("Brushing", "🛁"),
+        ("Play session", "🎾"),
+        ("Clean LITTER box", "🧹"),  # ignores case
+        ("Cuddles", "🐾"),  # no keyword: default
+    ],
+)
+def test_task_emoji_matches_task_type(description, emoji):
+    assert Task(description, 10, "low").emoji == emoji
+
+
+def test_task_emoji_follows_description_edits():
+    task = Task("Walk", 30, "high")
+    task.update(description="Bath time")
+    assert task.emoji == "🛁"
+
+
+def test_task_update_converts_priority():
+    task = Task("Walk", 30, "high")
+    task.update(priority="Low")
+    assert task.priority is Priority.LOW
 
 
 def test_mark_complete_changes_task_status():
@@ -375,6 +415,26 @@ def test_sort_by_time_puts_earliest_first_and_flexible_tasks_last():
         "Evening meds",
         "Flexible high",
         "Flexible low",
+    ]
+
+
+def test_sort_by_priority_then_time():
+    tasks = [
+        Task("Flexible high", 20, "high"),
+        Task("Evening meds", 5, "high", time=time(18, 0)),
+        Task("Low early", 10, "low", time=time(6, 0)),
+        Task("Morning meds", 5, "high", time=time(7, 30)),
+        Task("Breakfast", 10, "medium", time=time(7, 0)),
+        Task("Flexible medium", 10, "medium"),
+    ]
+    ordered = Scheduler(Owner("Jordan")).sort_by_priority_then_time(tasks)
+    assert [t.description for t in ordered] == [
+        "Morning meds",
+        "Evening meds",
+        "Flexible high",
+        "Breakfast",
+        "Flexible medium",
+        "Low early",
     ]
 
 

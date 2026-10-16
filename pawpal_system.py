@@ -2,18 +2,58 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field, fields, replace
 from datetime import date, time, timedelta
+from enum import StrEnum
 from typing import ClassVar, Optional
 
-# Lower number = higher priority. Used for sorting and for validating Task.priority.
-PRIORITY_ORDER = {"high": 0, "medium": 1, "low": 2}
+
+class Priority(StrEnum):
+    """How important a task is: HIGH, MEDIUM, or LOW.
+
+    Values are lowercase strings, so Priority.HIGH == "high" and either form
+    can be passed to Task. Lookup ignores case, so "High" works too.
+    """
+
+    HIGH = "high"
+    MEDIUM = "medium"
+    LOW = "low"
+
+    @classmethod
+    def _missing_(cls, value: object) -> Optional[Priority]:
+        """Accept any capitalization, e.g. "High" or "LOW"."""
+        if isinstance(value, str):
+            return cls.__members__.get(value.strip().upper())
+        return None
+
+
+# Lower number = higher priority. Used for sorting.
+PRIORITY_ORDER = {Priority.HIGH: 0, Priority.MEDIUM: 1, Priority.LOW: 2}
 
 # Days until the next occurrence of a recurring task. "once" tasks don't recur.
 RECURRENCE_DAYS = {"daily": 1, "weekly": 7}
 FREQUENCIES = (*RECURRENCE_DAYS, "once")
 
 MINUTES_PER_DAY = 24 * 60
+
+# Task type emojis, matched against the words of a task's description. A word
+# matches if it starts with a keyword ("feeding" matches "feed"). The first
+# matching row wins, so "Lunch treat" is a treat and "Vet call" is a vet visit.
+# All are single-character emojis so CLI columns stay aligned.
+TASK_TYPE_EMOJIS = [
+    ("🩺", ("vet", "checkup", "vaccin")),
+    ("💊", ("med", "pill", "dose", "insulin", "flea", "tick")),
+    ("🦴", ("treat", "chew")),
+    ("🥣", ("feed", "breakfast", "lunch", "dinner", "meal", "food", "kibble")),
+    ("💧", ("water",)),
+    ("🦮", ("walk", "hike", "run", "jog")),
+    ("🎾", ("play", "fetch", "toy", "game")),
+    ("🛁", ("bath", "brush", "groom", "nail", "trim", "wash")),
+    ("🎓", ("train", "lesson", "class")),
+    ("🧹", ("litter", "clean", "cage", "tank")),
+]
+DEFAULT_TASK_EMOJI = "🐾"
 
 
 def to_minutes(t: time) -> int:
@@ -65,7 +105,7 @@ class Task:
 
     description: str
     duration_minutes: int
-    priority: str  # "low", "medium", or "high"
+    priority: Priority  # a Priority, or "low", "medium", or "high" (converted to Priority)
     time: Optional[time] = None  # required start time, e.g. meds at 08:00; None lets the scheduler choose
     frequency: str = "daily"  # "daily", "weekly", or "once"
     completed: bool = False
@@ -73,11 +113,14 @@ class Task:
     due_date: date = field(default_factory=date.today)
 
     def __post_init__(self) -> None:
-        """Raise ValueError for an unknown priority or frequency, or a non-positive duration."""
-        if self.priority not in PRIORITY_ORDER:
+        """Convert priority to a Priority. Raise ValueError for an unknown priority
+        or frequency, or a non-positive duration."""
+        try:
+            self.priority = Priority(self.priority)
+        except ValueError:
             raise ValueError(
-                f"Priority must be one of {', '.join(PRIORITY_ORDER)}, got {self.priority!r}"
-            )
+                f"Priority must be one of {', '.join(Priority)}, got {self.priority!r}"
+            ) from None
         if self.frequency not in FREQUENCIES:
             raise ValueError(
                 f"Frequency must be one of {', '.join(FREQUENCIES)}, got {self.frequency!r}"
@@ -95,6 +138,16 @@ class Task:
         updated = replace(self, **changes)  # runs __post_init__ validation
         for f in fields(self):
             setattr(self, f.name, getattr(updated, f.name))
+
+    @property
+    def emoji(self) -> str:
+        """Return an emoji for the task's type, guessed from its description
+        (see TASK_TYPE_EMOJIS), or 🐾 if no keyword matches."""
+        words = re.findall(r"[a-z]+", self.description.lower())
+        for emoji, keywords in TASK_TYPE_EMOJIS:
+            if any(word.startswith(keywords) for word in words):
+                return emoji
+        return DEFAULT_TASK_EMOJI
 
     def is_due(self, on: date) -> bool:
         """Return True if the task is not completed and is due on or before `on`."""
@@ -402,6 +455,22 @@ class Scheduler:
         """Sort by PRIORITY_ORDER; ties go to the shorter task first."""
         return sorted(tasks, key=lambda t: (PRIORITY_ORDER[t.priority], t.duration_minutes))
 
+    def sort_by_priority_then_time(self, tasks: list[Task]) -> list[Task]:
+        """Sort by priority (high first), then by set time, earliest first.
+
+        Within a priority, tasks with no set time go last; any remaining ties
+        go to the shorter task first.
+        """
+        return sorted(
+            tasks,
+            key=lambda t: (
+                PRIORITY_ORDER[t.priority],
+                t.time is None,
+                t.time or time.min,  # placeholder so None is never compared to a time
+                t.duration_minutes,
+            ),
+        )
+
     def sort_by_time(self, tasks: list[Task]) -> list[Task]:
         """Sort set-time tasks by start time, earliest first; flexible tasks go last.
 
@@ -520,7 +589,7 @@ class Scheduler:
             for item in plan.items:
                 lines.append(
                     f"  {item.start_time:%H:%M}-{item.end_time:%H:%M}  "
-                    f"{item.task.description} ({self._pet_name(item.task)}): {item.reason}"
+                    f"{item.task.emoji} {item.task.description} ({self._pet_name(item.task)}): {item.reason}"
                 )
             lines.append(f"Total scheduled: {plan.total_minutes()} minutes")
         else:
@@ -530,7 +599,8 @@ class Scheduler:
             lines.append("Skipped:")
             for skipped in plan.skipped:
                 lines.append(
-                    f"  {skipped.task.description} ({self._pet_name(skipped.task)}): {skipped.reason}"
+                    f"  {skipped.task.emoji} {skipped.task.description} "
+                    f"({self._pet_name(skipped.task)}): {skipped.reason}"
                 )
         return "\n".join(lines)
 

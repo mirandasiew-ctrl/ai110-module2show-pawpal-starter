@@ -7,38 +7,10 @@ from pawpal_system import Owner, Pet, Scheduler, Task, TimeWindow
 st.set_page_config(page_title="PawPal+", page_icon="🐾", layout="centered")
 
 st.title("🐾 PawPal+")
-
-st.markdown(
-    """
-Welcome to the PawPal+ starter app.
-
-This file is intentionally thin. It gives you a working Streamlit app so you can start quickly,
-but **it does not implement the project logic**. Your job is to design the system and build it.
-
-Use this app as your interactive demo once your backend classes/functions exist.
-"""
+st.caption(
+    "Plan your pets' care around your day. Add the time you have free, your pets, and "
+    "their tasks, then build a schedule that fits the most important care first."
 )
-
-with st.expander("Scenario", expanded=True):
-    st.markdown(
-        """
-**PawPal+** is a pet care planning assistant. It helps a pet owner plan care tasks
-for their pet(s) based on constraints like time, priority, and preferences.
-
-You will design and implement the scheduling logic and connect it to this Streamlit UI.
-"""
-    )
-
-with st.expander("What you need to build", expanded=True):
-    st.markdown(
-        """
-At minimum, your system should:
-- Represent pet care tasks (what needs to happen, how long it takes, priority)
-- Represent the pet and the owner (basic info and preferences)
-- Build a plan/schedule for a day that chooses and orders tasks based on constraints
-- Explain the plan (why each task was chosen and when it happens)
-"""
-    )
 
 st.divider()
 
@@ -46,9 +18,26 @@ SPECIES = ["dog", "cat", "other"]
 PRIORITIES = ["high", "medium", "low"]
 FREQUENCIES = ["daily", "weekly", "once"]
 
+# Shared column formats for the tables below; priority shows as a colored badge.
+PRIORITY_COLUMN = st.column_config.MultiselectColumn(
+    "Priority", options=PRIORITIES, color=["red", "orange", "blue"]
+)
+TASK_COLUMNS = {
+    "Pet": st.column_config.TextColumn("Pet", pinned=True),
+    "Task": st.column_config.TextColumn("Task", pinned=True),
+    "Minutes": st.column_config.NumberColumn("Length", format="%d min"),
+    "Priority": PRIORITY_COLUMN,
+    "Set time": st.column_config.TimeColumn("Set time", format="HH:mm"),
+    "Repeats": st.column_config.TextColumn("Repeats"),
+    "Due": st.column_config.DateColumn("Due", format="MMM D"),
+    "Done": st.column_config.CheckboxColumn("Done"),
+    "Conflict": st.column_config.TextColumn("Conflict", help="Set-time tasks that overlap this one"),
+}
+
 # One Owner per browser session; its pets, tasks, and windows live inside it.
 st.session_state.setdefault("owner", Owner("Jordan"))
 owner: Owner = st.session_state.owner
+scheduler = Scheduler(owner)  # reads the owner live, so one per run is enough
 
 
 def window_label(w: TimeWindow) -> str:
@@ -60,15 +49,27 @@ def pet_name(pet_id: int) -> str:
     return pet.name if pet is not None else "removed pet"
 
 
-def conflict_warning(task: Task) -> str | None:
-    """Describe the set-time tasks that overlap `task` on its due date, or None if none do."""
+def conflicting_tasks(task: Task) -> list[Task]:
+    """Return the set-time tasks that overlap `task` on its due date."""
     if task.time is None or task.completed:
-        return None
-    others = [
+        return []
+    return [
         b if a is task else a
-        for a, b in Scheduler(owner).find_conflicts(task.due_date)
+        for a, b in scheduler.find_conflicts(task.due_date)
         if a is task or b is task
     ]
+
+
+def conflict_line(a: Task, b: Task) -> str:
+    return (
+        f"- {a.emoji} **{a.description}** ({pet_name(a.pet_id)}, {a.time:%H:%M}, {a.duration_minutes} min) "
+        f"overlaps {b.emoji} **{b.description}** ({pet_name(b.pet_id)}, {b.time:%H:%M}, {b.duration_minutes} min)"
+    )
+
+
+def conflict_warning(task: Task) -> str | None:
+    """Describe the set-time tasks that overlap `task` on its due date, or None if none do."""
+    others = conflicting_tasks(task)
     if not others:
         return None
     clashes = ", ".join(
@@ -162,18 +163,23 @@ with st.form("add_pet", clear_on_submit=True):
             st.error("Enter a pet name.")
 
 if owner.pets:
-    st.table(
+    st.dataframe(
         [
             {
                 "Name": p.name,
                 "Species": p.species,
                 "Breed": p.breed,
                 "Age": p.age,
-                "Special needs": ", ".join(p.special_needs),
-                "Tasks": len(p.tasks),
+                "Special needs": p.special_needs,
+                "Tasks to do": len(p.get_pending_tasks()),
             }
             for p in owner.pets
-        ]
+        ],
+        column_config={
+            "Age": st.column_config.NumberColumn("Age", format="%d yr"),
+            "Special needs": st.column_config.MultiselectColumn("Special needs", color="gray"),
+        },
+        hide_index=True,
     )
 
     with st.expander("Edit or remove a pet"):
@@ -261,22 +267,55 @@ else:
     if warning := st.session_state.pop("task_conflict", None):
         st.warning(warning)
 
-    all_tasks = owner.get_all_tasks()
-    if all_tasks:
-        st.table(
+    all_tasks: list[Task] = []  # the tasks shown, after filtering and sorting
+    if not owner.get_all_tasks():
+        st.info("No tasks yet. Add one above.")
+    else:
+        with st.container(horizontal=True):
+            show_pet = st.selectbox(
+                "Pet",
+                [None] + [p.pet_id for p in owner.pets],
+                format_func=lambda pid: "All pets" if pid is None else pet_name(pid),
+                key="task_filter_pet",
+            )
+            show_status = st.segmented_control(
+                "Status", ["To do", "Done", "All"], default="To do", key="task_filter_status"
+            )
+            sort_by = st.segmented_control(
+                "Sort by", ["Time", "Priority"], default="Time", key="task_sort"
+            )
+
+        # "All", or a deselected control, passes None so both statuses are kept.
+        completed = {"To do": False, "Done": True}.get(show_status)
+        all_tasks = scheduler.filter_tasks(pet_id=show_pet, completed=completed)
+        if sort_by == "Priority":
+            all_tasks = scheduler.sort_by_priority_then_time(all_tasks)
+        else:
+            # sort_by_time orders within a day; the stable sort by date keeps that order.
+            all_tasks = sorted(scheduler.sort_by_time(all_tasks), key=lambda t: t.due_date)
+
+    if owner.get_all_tasks() and not all_tasks:
+        st.info("No tasks match these filters.")
+    elif all_tasks:
+        st.dataframe(
             [
                 {
                     "Pet": pet_name(t.pet_id),
-                    "Task": t.description,
+                    "Task": f"{t.emoji} {t.description}",
                     "Minutes": t.duration_minutes,
-                    "Priority": t.priority,
-                    "Set time": f"{t.time:%H:%M}" if t.time else "—",
+                    "Priority": [t.priority],
+                    "Set time": t.time,
                     "Repeats": t.frequency,
-                    "Due": f"{t.due_date:%b %d}",
-                    "Done": "✓" if t.completed else "",
+                    "Due": t.due_date,
+                    "Done": t.completed,
+                    "Conflict": ", ".join(
+                        f"⚠️ {o.emoji} {o.description} ({pet_name(o.pet_id)})" for o in conflicting_tasks(t)
+                    ),
                 }
                 for t in all_tasks
-            ]
+            ],
+            column_config=TASK_COLUMNS,
+            hide_index=True,
         )
 
         with st.expander("Edit, complete, or remove a task"):
@@ -285,7 +324,7 @@ else:
                     "Task to edit",
                     range(len(all_tasks)),
                     format_func=lambda i: (
-                        f"{pet_name(all_tasks[i].pet_id)}: {all_tasks[i].description} "
+                        f"{pet_name(all_tasks[i].pet_id)}: {all_tasks[i].emoji} {all_tasks[i].description} "
                         f"(due {all_tasks[i].due_date:%b %d})"
                     ),
                 )
@@ -353,8 +392,6 @@ else:
                 if st.button("Mark complete", key=f"complete_{k}"):
                     owner.get_pet(task.pet_id).complete_task(task)
                     st.rerun()
-    else:
-        st.info("No tasks yet. Add one above.")
 
 st.divider()
 
@@ -364,31 +401,61 @@ st.subheader("Build schedule")
 st.caption("Plans the selected day's tasks for all pets within your available time.")
 
 plan_date = st.date_input("Plan for", value=date.today())
+
+# Warn before planning, so the owner can fix times instead of losing a task.
+if conflicts := scheduler.find_conflicts(plan_date):
+    st.warning(
+        f"{len(conflicts)} time conflict(s) on {plan_date:%b %d}. Only the higher-priority task "
+        "of each pair will be scheduled; edit a task's time to keep both.\n"
+        + "\n".join(conflict_line(a, b) for a, b in conflicts),
+        icon=":material/warning:",
+    )
+
 if st.button("Generate schedule", type="primary"):
-    scheduler = Scheduler(owner)
     plan = scheduler.generate_plan(plan_date)
 
+    minutes_used = sum(item.task.duration_minutes for item in plan.items)
+    minutes_free = owner.total_available_minutes()
+    with st.container(horizontal=True):
+        st.metric("Tasks scheduled", len(plan.items), border=True)
+        st.metric(
+            "Time used",
+            f"{minutes_used} of {minutes_free} min",
+            help="Minutes of scheduled tasks out of your total available time",
+            border=True,
+        )
+        st.metric("Tasks left out", len(plan.skipped), border=True)
+
     if plan.items:
-        st.table(
+        st.dataframe(
             [
                 {
                     "Time": f"{item.start_time:%H:%M}–{item.end_time:%H:%M}",
-                    "Task": item.task.description,
+                    "Task": f"{item.task.emoji} {item.task.description}",
                     "Pet": pet_name(item.task.pet_id),
+                    "Priority": [item.task.priority],
                     "Why": item.reason,
                 }
                 for item in plan.items
-            ]
+            ],
+            column_config={
+                "Time": st.column_config.TextColumn("Time", pinned=True),
+                "Priority": PRIORITY_COLUMN,
+                "Why": st.column_config.TextColumn("Why", width="large"),
+            },
+            hide_index=True,
         )
 
     with st.expander("Plan explanation", expanded=not plan.items):
         st.text(scheduler.explain_plan(plan))
 
+    if plan.items and not plan.skipped:
+        st.success(f"All {len(plan.items)} task(s) due fit in your available time.")
     if plan.skipped:
         st.warning(
             f"{len(plan.skipped)} task(s) left out of the plan:\n"
             + "\n".join(
-                f"- **{s.task.description}** ({pet_name(s.task.pet_id)}): {s.reason}"
+                f"- {s.task.emoji} **{s.task.description}** ({pet_name(s.task.pet_id)}): {s.reason}"
                 for s in plan.skipped
             )
         )

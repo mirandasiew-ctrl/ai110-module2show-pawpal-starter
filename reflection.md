@@ -38,7 +38,23 @@ Owner.get_all_tasks() returns a list[Task], and a Task doesn't record which pet 
 **a. Constraints and priorities**
 
 - What constraints does your scheduler consider (for example: time, priority, preferences)?
+The scheduler considers these constraints:
+- Available time: tasks are only scheduled inside the owner's availability windows, and a task must fit entirely inside one window. Tasks are never split across windows or gaps.
+- Set times: a task with a set time (e.g. meds at 08:00) is placed at exactly that time or left out. It is never moved to another slot.
+- Priority: high, medium and low decide the order tasks are placed in. When two set-time tasks overlap, the higher-priority one keeps its time.
+- Duration: a task only goes into a free gap that is at least as long as the task. When two tasks have the same priority, the shorter one goes first, so more tasks fit.
+- No overlaps: two tasks can't be scheduled at the same time, even for different pets, because one owner does all the care. Tasks that only touch (one ends at 8:00 and the next starts at 8:00) are allowed.
+- Due date and status: only tasks that aren't completed and are due on or before the plan date are scheduled. Overdue tasks carry over, and future tasks wait.
+- Frequency: daily and weekly tasks come back after they are completed, so each day's plan only includes that day's copy.
+
+It does not consider pet preferences. Breed, age and special needs are stored on each pet and shown in the app, but the scheduler doesn't use them. A preference like "walk Mochi in the morning" has to be entered as a set time on the task.
+
 - How did you decide which constraints mattered most?
+I sorted the constraints into hard ones that a plan can never break and soft ones that decide what happens when not everything fits. The hard constraints come from what's physically or medically possible: available time, no overlaps, set times, and no splitting.
+
+For the soft constraints, I ranked priority first. Among tasks with the same priority, shorter ones go first so more of them fit. Due dates and completion status decide which tasks are in the plan at all, rather than how they're placed. Overdue tasks carry over because a missed daily task still needs doing.
+
+I left pet preferences out of the scheduler on purpose. They're harder to define as rules, and a set time already covers the most common one.
 
 **b. Tradeoffs**
 
@@ -74,12 +90,29 @@ I reviewed the classes and fields AI suggested, questioned them when they didn't
 **a. What you tested**
 
 - What behaviors did you test?
+The test suite has 65 pytest tests in tests/test_pawpal.py. They test sorting, recurring tasks, conflict detection, scheduling, edge cases like a pet with no tasks, an owner with no free time, a plan where every task is completed, overdue tasks carrying over, and explaining a plan after a pet was removed. They also test validation and data rules such as invalid time windows.
+
 - Why were these tests important?
+These tests were important because the scheduler's mistakes would be easy to miss but costly for a real pet owner. A plan that silently drops a medication task, or schedules two tasks at once, looks fine on screen until something goes wrong.
+
+The logic has many interacting rules. Set-time tasks, free gaps, priority order and conflict handling all affect each other. Clicking through the app might never produce the exact case where an early gap gets used up wrongly, but a test with fixed times checks the exact output.
+
+Most bugs happen at the edges. That includes a task ending exactly at a window's end, two tasks that only touch, two tasks at the same time, and dates at the end of a month or year. These are the cases where it's easy to mix up < and <=, so I tested each one directly.
+
+Recurrence depends on dates. It's easy to get wrong without noticing, for example an overdue task coming back with a date in the past. Fixing "today" to a set date in the tests made those checks repeatable.
+
+The tests found a real bug. Completing the same task twice, which a double-click in the app could do, created two copies of tomorrow's task. Writing the test first exposed the bug, and the same test now stops it from coming back.
+They let me change code safely. When I added sorting, filtering and conflict warnings, and later reworked the app, running all the tests showed that the existing scheduling still worked.
+
+They lock in the design rules. For example, the scheduler must plan across all pets, never just one. A test enforces that, so a later change can't quietly break it.
 
 **b. Confidence**
 
 - How confident are you that your scheduler works correctly?
+I am over 90% confident that the scheduler works correctly.
+
 - What edge cases would you test next if you had more time?
+I would test marking a completed task as not done, tasks near midnight that will end past midnight to confirm it is skipped cleanly, three or more tasks at the same time that only the highest-priority one is kept.
 
 ---
 
@@ -88,11 +121,15 @@ I reviewed the classes and fields AI suggested, questioned them when they didn't
 **a. What went well**
 
 - What part of this project are you most satisfied with?
+I'm most satisfied with the design part. I started from a UML diagram, questioned the AI's suggestions until each class made sense to me, and the final code ended up with the same eight classes. Key rules like "the scheduler always reads tasks from the owner, across all pets" stayed consistent from the diagram to the code to the tests.
 
 **b. What you would improve**
 
 - If you had another iteration, what would you improve or redesign?
+I would improve on using preferences in scheduling. Pet has special_needs, age and breed information, but the scheduler ignores them. I would add the design to make use of this information when scheduling.
 
 **c. Key takeaway**
 
 - What is one important thing you learned about designing systems or working with AI on this project?
+What I have learned is if something I don't understand or have questions about, ask the AI, then the AI will review and may found that there is a bug.  And, it is very important to work with the AI to come up with a correct design first, then the AI will implement the logic correctly at the first place instead of making changes later on that may produce more bugs and more work to clean up.
+

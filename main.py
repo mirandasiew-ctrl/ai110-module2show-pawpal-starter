@@ -16,7 +16,7 @@ def print_tasks(title: str, tasks: list[Task], owner: Owner) -> None:
         pet = owner.get_pet(task.pet_id)
         status = "done" if task.completed else "pending"
         print(
-            f"  {when:<8}  {task.description:<14} {pet.name:<6} "
+            f"  {when:<8}  {task.emoji} {task.description:<14} {pet.name:<6} "
             f"{task.priority:<6}  {task.duration_minutes:>3} min  {status}"
         )
     print()
@@ -57,16 +57,23 @@ def main() -> None:
 
     print_tasks("All tasks, in the order they were added:", owner.get_all_tasks(), owner)
     print_tasks("Sorted by time (flexible tasks last):", scheduler.sort_by_time(owner.get_all_tasks()), owner)
-    print_tasks("Pending tasks:", scheduler.filter_tasks(completed=False), owner)
+    print_tasks(
+        "Sorted by priority, then time:", scheduler.sort_by_priority_then_time(owner.get_all_tasks()), owner
+    )
+    print_tasks(
+        "Pending tasks, by priority then time:",
+        scheduler.sort_by_priority_then_time(scheduler.filter_tasks(completed=False)),
+        owner,
+    )
     print_tasks("Completed tasks:", scheduler.filter_tasks(completed=True), owner)
     print_tasks(
-        'Luna\'s tasks (filter pet_name=" luna "), sorted by time:',
-        scheduler.sort_by_time(scheduler.filter_tasks(pet_name=" luna ")),
+        'Luna\'s tasks (filter pet_name=" luna "), by priority then time:',
+        scheduler.sort_by_priority_then_time(scheduler.filter_tasks(pet_name=" luna ")),
         owner,
     )
     print_tasks(
-        "Mochi's pending tasks, sorted by time:",
-        scheduler.sort_by_time(scheduler.filter_tasks(pet_name="Mochi", completed=False)),
+        "Mochi's pending tasks, by priority then time:",
+        scheduler.sort_by_priority_then_time(scheduler.filter_tasks(pet_name="Mochi", completed=False)),
         owner,
     )
 
@@ -76,8 +83,9 @@ def main() -> None:
         print("  (none)")
     for first, second in conflicts:
         print(
-            f"  WARNING: {first.description} ({owner.get_pet(first.pet_id).name}) at {first.time:%H:%M} "
-            f"overlaps {second.description} ({owner.get_pet(second.pet_id).name}) at {second.time:%H:%M}"
+            f"  WARNING: {first.emoji} {first.description} ({owner.get_pet(first.pet_id).name}) "
+            f"at {first.time:%H:%M} overlaps {second.emoji} {second.description} "
+            f"({owner.get_pet(second.pet_id).name}) at {second.time:%H:%M}"
         )
     print()
 
