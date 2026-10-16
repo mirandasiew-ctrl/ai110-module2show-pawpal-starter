@@ -105,9 +105,12 @@ class Task:
 
         Daily tasks come back the next day and weekly tasks 7 days later,
         counted from the due date (or from today, if the task was overdue).
-        "once" tasks return None. The new task is not attached to a pet yet;
-        use Pet.complete_task() to complete and re-add in one step.
+        "once" tasks, and tasks that were already completed, return None. The
+        new task is not attached to a pet yet; use Pet.complete_task() to
+        complete and re-add in one step.
         """
+        if self.completed:
+            return None  # completing twice (e.g. a double click) must not recur twice
         self.completed = True
         if self.frequency not in RECURRENCE_DAYS:
             return None

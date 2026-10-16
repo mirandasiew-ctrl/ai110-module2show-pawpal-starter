@@ -4,6 +4,7 @@ from datetime import date, time, timedelta
 
 import pytest
 
+import pawpal_system
 from pawpal_system import Owner, Pet, Scheduler, Task, TimeWindow
 
 
@@ -114,6 +115,101 @@ def test_task_due_later_is_not_planned_today():
         Pet("Mochi", "dog", tasks=[Task("Bath", 30, "low", due_date=TODAY + timedelta(days=3))])
     )
     assert plan_summary(owner) == []
+
+
+def freeze_today(monkeypatch, frozen: date) -> None:
+    """Make pawpal_system's date.today() return `frozen`."""
+
+    class FrozenDate(date):
+        @classmethod
+        def today(cls) -> date:
+            return frozen
+
+    monkeypatch.setattr(pawpal_system, "date", FrozenDate)
+
+
+def test_completing_task_twice_does_not_add_a_second_occurrence():
+    mochi = Pet("Mochi", "dog")
+    walk = Task("Walk", 30, "high")
+    mochi.add_task(walk)
+
+    mochi.complete_task(walk)
+    assert mochi.complete_task(walk) is None
+    assert len(mochi.tasks) == 2
+
+
+def test_overdue_daily_task_comes_back_tomorrow_not_in_the_past(monkeypatch):
+    freeze_today(monkeypatch, date(2026, 3, 10))
+    task = Task("Walk", 30, "high", due_date=date(2026, 3, 7))
+    assert task.mark_complete().due_date == date(2026, 3, 11)
+
+
+def test_weekly_task_completed_early_counts_from_due_date(monkeypatch):
+    freeze_today(monkeypatch, date(2026, 3, 10))
+    task = Task("Bath", 30, "low", frequency="weekly", due_date=date(2026, 3, 13))
+    assert task.mark_complete().due_date == date(2026, 3, 20)
+
+
+@pytest.mark.parametrize(
+    "today, frequency, expected",
+    [
+        (date(2026, 12, 31), "daily", date(2027, 1, 1)),
+        (date(2028, 2, 28), "daily", date(2028, 2, 29)),  # leap year
+        (date(2026, 2, 25), "weekly", date(2026, 3, 4)),
+    ],
+)
+def test_recurrence_rolls_over_month_and_year(monkeypatch, today, frequency, expected):
+    freeze_today(monkeypatch, today)
+    task = Task("Walk", 30, "high", frequency=frequency, due_date=today)
+    assert task.mark_complete().due_date == expected
+
+
+def test_overdue_task_is_still_planned_today():
+    owner = make_owner((time(7, 0), time(9, 0)))
+    owner.add_pet(
+        Pet("Mochi", "dog", tasks=[Task("Walk", 30, "high", due_date=TODAY - timedelta(days=1))])
+    )
+    assert plan_summary(owner) == [("Walk", time(7, 0), time(7, 30))]
+
+
+def test_next_occurrence_keeps_settings_and_is_a_separate_object():
+    task = Task("Meds", 5, "high", time=time(8, 0), frequency="weekly")
+    next_task = task.mark_complete()
+
+    assert next_task is not task
+    assert (next_task.description, next_task.duration_minutes, next_task.priority) == (
+        "Meds", 5, "high"
+    )
+    assert (next_task.time, next_task.frequency) == (time(8, 0), "weekly")
+
+    next_task.update(duration_minutes=10)
+    assert task.duration_minutes == 5 and task.completed is True
+
+
+def test_completing_one_pets_task_leaves_other_pets_alone():
+    owner = make_owner((time(7, 0), time(9, 0)))
+    mochi = Pet("Mochi", "dog", tasks=[Task("Walk", 30, "high")])
+    luna = Pet("Luna", "cat", tasks=[Task("Feeding", 10, "high")])
+    owner.add_pet(mochi)
+    owner.add_pet(luna)
+
+    mochi.complete_task(mochi.tasks[0])
+
+    assert [t.description for t in luna.tasks] == ["Feeding"]
+    assert luna.tasks[0].completed is False
+    assert [name for name, _, _ in plan_summary(owner)] == ["Feeding"]
+
+
+def test_tomorrows_plan_has_next_occurrence_once():
+    owner = make_owner((time(7, 0), time(9, 0)))
+    mochi = Pet("Mochi", "dog", tasks=[Task("Walk", 30, "high")])
+    owner.add_pet(mochi)
+    mochi.complete_task(mochi.tasks[0])
+
+    tomorrow = Scheduler(owner).generate_plan(TODAY + timedelta(days=1))
+
+    assert [item.task.description for item in tomorrow.items] == ["Walk"]
+    assert tomorrow.items[0].task.completed is False
 
 
 # --- Pet --------------------------------------------------------------------
@@ -284,6 +380,90 @@ def test_sort_by_time_puts_earliest_first_and_flexible_tasks_last():
 
 def test_sort_by_time_handles_empty_list():
     assert Scheduler(Owner("Jordan")).sort_by_time([]) == []
+
+
+def test_sort_by_priority_keeps_insertion_order_for_full_ties():
+    tasks = [Task("First", 10, "high"), Task("Second", 10, "high"), Task("Third", 10, "high")]
+    ordered = Scheduler(Owner("Jordan")).sort_by_priority(tasks)
+    assert [t.description for t in ordered] == ["First", "Second", "Third"]
+
+
+def test_sorting_does_not_change_the_input_list():
+    tasks = [Task("Low", 5, "low"), Task("High", 10, "high", time=time(9, 0))]
+    original = list(tasks)
+    scheduler = Scheduler(Owner("Jordan"))
+
+    scheduler.sort_by_priority(tasks)
+    scheduler.sort_by_time(tasks)
+
+    assert tasks == original
+
+
+def test_plan_with_no_availability_skips_everything():
+    owner = Owner("Jordan")
+    owner.add_pet(Pet("Mochi", "dog", tasks=[Task("Walk", 30, "high")]))
+    scheduler = Scheduler(owner)
+
+    plan = scheduler.generate_plan()
+
+    assert plan.items == []
+    assert [s.task.description for s in plan.skipped] == ["Walk"]
+    assert scheduler.explain_plan(plan).startswith("No tasks scheduled")
+
+
+def test_pet_with_no_tasks_does_not_affect_scheduling():
+    owner = make_owner((time(7, 0), time(9, 0)))
+    luna = Pet("Luna", "cat")
+    owner.add_pet(Pet("Mochi", "dog", tasks=[Task("Walk", 30, "high", time=time(7, 0))]))
+    owner.add_pet(luna)
+    scheduler = Scheduler(owner)
+
+    assert scheduler.filter_tasks(pet_id=luna.pet_id) == []
+    assert scheduler.find_conflicts() == []
+    assert plan_summary(owner) == [("Walk", time(7, 0), time(7, 30))]
+
+
+def test_owner_whose_only_pet_has_no_tasks_gets_empty_plan():
+    owner = make_owner((time(7, 0), time(9, 0)))
+    owner.add_pet(Pet("Luna", "cat"))
+
+    plan = Scheduler(owner).generate_plan()
+
+    assert plan.items == [] and plan.skipped == []
+
+
+def test_same_start_time_same_priority_keeps_shorter_task():
+    owner = make_owner((time(7, 0), time(9, 0)))
+    owner.add_pet(Pet("Mochi", "dog", tasks=[Task("Walk", 30, "high", time=time(8, 0))]))
+    owner.add_pet(Pet("Luna", "cat", tasks=[Task("Feeding", 10, "high", time=time(8, 0))]))
+
+    plan = Scheduler(owner).generate_plan()
+
+    assert [(i.task.description, i.start_time, i.end_time) for i in plan.items] == [
+        ("Feeding", time(8, 0), time(8, 10))
+    ]
+    assert [(s.task.description, s.reason) for s in plan.skipped] == [
+        ("Walk", "set for 08:00, conflicts with Feeding (Luna) at 08:00-08:10")
+    ]
+
+
+def test_find_conflicts_different_pets_exact_same_time():
+    owner = Owner("Jordan")
+    owner.add_pet(Pet("Mochi", "dog", tasks=[Task("Walk", 30, "medium", time=time(8, 0))]))
+    owner.add_pet(Pet("Luna", "cat", tasks=[Task("Meds", 5, "high", time=time(8, 0))]))
+    # Same start time: the higher-priority task comes first, whatever order pets were added.
+    assert conflict_names(owner) == [("Meds", "Walk")]
+
+
+def test_plan_with_only_completed_tasks_is_empty():
+    owner = make_owner((time(7, 0), time(9, 0)))
+    done = Task("Vet visit", 60, "high", frequency="once")
+    owner.add_pet(Pet("Mochi", "dog", tasks=[done]))
+    done.mark_complete()
+
+    plan = Scheduler(owner).generate_plan()
+
+    assert plan.items == [] and plan.skipped == []
 
 
 def test_plan_includes_tasks_from_all_pets():

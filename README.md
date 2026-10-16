@@ -63,6 +63,14 @@ Plan for Saturday, October 10:
 Total scheduled: 125 minutes
 
 ## 🧪 Testing PawPal+
+The test suite (`tests/test_pawpal.py`, 65 tests) covers the scheduling logic in `pawpal_system.py`:
+- **Validation:** rejects invalid time windows, priorities, frequencies, task durations, overlapping availability windows and duplicate pets.
+- **Pets and tasks:** adding, removing, editing and moving tasks between pets, and making sure each task belongs to exactly one pet.
+- **Sorting:** priority order with shorter tasks first on ties, chronological order with tasks that have no set time last, stable order for full ties, and no change to the input list.
+- **Recurring tasks:** daily and weekly tasks come back on the right date. This includes overdue tasks, tasks completed early, month, year and leap-year rollovers, and not creating a duplicate when a task is completed twice.
+- **Scheduling:** tasks from every pet go in one plan, set-time tasks keep their time, other tasks fill the earliest gap that fits, tasks are never split, and the plan is in time order.
+- **Conflicts:** overlapping or identical times are flagged for the same pet and across pets, the higher-priority task wins, and each skipped task gets a reason. Tasks that only touch, completed tasks and tasks not yet due are not flagged.
+- **Edge cases:** a pet with no tasks, an owner with no free time, a plan where every task is completed, and explaining a plan after a pet is removed.
 
 ```bash
 # Run the full test suite:
@@ -77,6 +85,44 @@ Sample test output:
 ```
 # Paste your pytest output here
 ```
+python -m pytest
+================= test session starts =================
+platform win32 -- Python 3.13.0, pytest-9.1.1, pluggy-1.6.0
+rootdir: C:\Development\AI110\Projects\ai110-module2show-pawpal-starter
+configfile: pytest.ini
+testpaths: tests
+plugins: anyio-4.15.1, platformdirs-4.13.0
+collected 65 items                                     
+
+tests\test_pawpal.py ........................... [ 41%]
+......................................           [100%]
+
+================= 65 passed in 0.27s ==================
+
+python -m pytest --cov
+================================= test session starts ==================================
+platform win32 -- Python 3.13.0, pytest-9.1.1, pluggy-1.6.0
+rootdir: C:\Development\AI110\Projects\ai110-module2show-pawpal-starter
+configfile: pytest.ini
+testpaths: tests
+plugins: anyio-4.15.1, platformdirs-4.13.0, cov-7.1.0
+collected 65 items                                                                      
+
+tests\test_pawpal.py ............................................................ [ 92%]
+.....                                                                             [100%]
+
+==================================== tests coverage ====================================
+___________________ coverage: platform win32, python 3.13.0-final-0 ____________________
+
+Name                   Stmts   Miss  Cover
+------------------------------------------
+pawpal_system.py         270     11    96%
+tests\test_pawpal.py     381      0   100%
+------------------------------------------
+TOTAL                    651     11    98%
+================================== 65 passed in 0.52s ==================================
+
+ My Confidence Level (1–5 stars) in the system's reliability based on test results: 5
 
 ## 📐 Smarter Scheduling
 This system plans one day of pet care for an owner with several pets, fitting tasks into the times the owner is free. It has the following classes: Owner, TimeWindow, Pet, Task, Scheduler, DailyPlan, ScheduledItem and SkippedTask. Owner holds the owner's pets and free time. TimeWindow holds the free periods of the Owner. Pet holds a pet's details and its tasks. Task holds care activities. Scheduler builds the plan. It reads tasks from the owner so one plan covers every pet. DailyPlan, ScheduledItem and SkippedTask are the result: a list of scheduled tasks, each with a start time, an end time and the reason it was placed there, plus a list of tasks that were left out and why.
